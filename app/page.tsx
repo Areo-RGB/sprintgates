@@ -16,9 +16,17 @@ const formatTime = (timestamp: number | null) => {
 };
 
 export default function Home() {
-  const { triggerGate, syncTime, isConnected, gateConfig, setGateConfig } = useRace();
+  const { triggerGate, syncTime, isConnected, gateConfig, setGateConfig, distanceConfig, setDistances } = useRace();
   const [mounted, setMounted] = useState(false);
   const [mode, setMode] = useState<'manual' | 'motion'>('manual');
+  const [showDistances, setShowDistances] = useState(false);
+  const [localDistances, setLocalDistances] = useState<number[]>([]);
+
+  useEffect(() => {
+     if (distanceConfig) {
+         setLocalDistances(distanceConfig);
+     }
+  }, [distanceConfig]);
 
   useEffect(() => {
     setMounted(true);
@@ -34,13 +42,23 @@ export default function Home() {
             <div className="flex items-center gap-2 order-2 sm:order-1 w-full sm:w-auto justify-center sm:justify-start">
                 <button 
                     onClick={() => setMode(mode === 'motion' ? 'manual' : 'motion')}
-                    className={`text-xs px-3 py-1 rounded border uppercase tracking-wider whitespace-nowrap transition-colors ${
+                    className={`flex items-center justify-center gap-2 text-xs px-3 py-1.5 rounded border uppercase tracking-wider whitespace-nowrap transition-colors ${
                         mode === 'motion' 
                         ? 'bg-[#FF00FF]/20 border-[#FF00FF]/50 text-[#FF00FF] hover:bg-[#FF00FF]/30' 
                         : 'bg-[#CEFF00]/20 border-[#CEFF00]/50 text-[#CEFF00] hover:bg-[#CEFF00]/30'
                     }`}
                 >
-                    {mode === 'motion' ? 'Exit Camera' : '📷 Motion Gate'}
+                    {mode === 'motion' ? (
+                        <>
+                            <span className="inline-flex items-center relative top-[-3px] text-base leading-none">📷</span>
+                            <span className="leading-none">Exit Camera</span>
+                        </>
+                    ) : (
+                         <>
+                            <span className="inline-flex items-center relative top-[-3px] text-base leading-none">📷</span>
+                            <span className="leading-none">Motion Gate</span>
+                        </>
+                    )}
                 </button>
                 
                 {/* Gate Config dropdown/toggle */}
@@ -55,11 +73,55 @@ export default function Home() {
                         </button>
                     ))}
                 </div>
+                 
+                 {/* Distance Setup Toggle */}
+                  <button
+                    onClick={() => setShowDistances(!showDistances)}
+                    className={`text-xs px-2 py-1 rounded border border-[#CEFF00]/30 uppercase tracking-wider whitespace-nowrap transition-colors ${showDistances ? 'bg-[#CEFF00] text-black' : 'text-gray-400'}`}
+                >
+                    📏 Dist
+                </button>
             </div>
             <div className="text-4xl sm:text-4xl font-mono font-black tracking-widest text-shadow-neon order-1 sm:order-2">
             {formatTime(syncTime)}
             </div>
         </div>
+        
+        {/* Dynamic Distance Inputs */}
+        {showDistances && (
+            <div className="mt-2 bg-black/50 p-2 rounded border border-[#CEFF00]/20 flex gap-2 items-end justify-center sm:justify-start flex-wrap">
+                 {Array.from({ length: gateConfig - 1 }).map((_, i) => {
+                    const isFinish = i === gateConfig - 2;
+                    const label = isFinish ? 'FINISH' : `SPLIT ${i + 1}`;
+                    return (
+                        <div key={i} className="flex flex-col gap-1">
+                            <label className="text-[10px] text-gray-500 font-mono text-center">{label} (m)</label>
+                            <input
+                                type="number"
+                                className="w-16 bg-zinc-800 text-white border border-gray-600 rounded px-2 py-1 text-center font-mono font-bold focus:border-[#CEFF00] outline-none"
+                                placeholder="0"
+                                value={localDistances[i] || ''}
+                                onChange={(e) => {
+                                    const newDistances = [...localDistances];
+                                    newDistances[i] = Number(e.target.value);
+                                    setLocalDistances(newDistances);
+                                }}
+                            />
+                        </div>
+                    );
+                 })}
+                 <button 
+                    onClick={() => {
+                        setDistances(localDistances);
+                        setShowDistances(false);
+                    }}
+                    className="bg-[#CEFF00] text-black text-xs font-bold px-3 py-2 rounded uppercase hover:bg-[#b5e000] ml-2"
+                >
+                    Save
+                </button>
+            </div>
+        )}
+
         {!isConnected && <div className="text-xs text-center text-red-500 animate-pulse">CONNECTING TO RACE SERVER...</div>}
       </div>
 

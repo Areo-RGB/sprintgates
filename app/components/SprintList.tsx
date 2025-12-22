@@ -29,7 +29,7 @@ const ProgressIndicator = ({ currentGate, totalGates }: { currentGate: number, t
     );
 };
 
-const SprintCard = ({ sprint, index, gateConfig }: { sprint: any, index: number, gateConfig: number }) => {
+const SprintCard = ({ sprint, index, gateConfig, distanceConfig }: { sprint: any, index: number, gateConfig: number, distanceConfig?: number[] }) => {
     const isRunning = sprint.events.length < gateConfig;
     const [elapsed, setElapsed] = useState(0);
     const { syncTime } = useRace();
@@ -59,25 +59,121 @@ const SprintCard = ({ sprint, index, gateConfig }: { sprint: any, index: number,
 
             {/* Splits Table */}
             <div className="bg-black/30 rounded p-2 text-xs font-mono">
+                {/* Header if distances are set */}
+                {distanceConfig && distanceConfig.length > 0 && (
+                    <div className="grid grid-cols-4 text-[10px] text-gray-500 uppercase tracking-wider border-b border-white/10 pb-2 mb-2 font-bold px-1">
+                        <div>Gate</div>
+                        <div className="text-right">Time</div>
+                        <div className="text-right">Vel</div>
+                        <div className="text-right">Accel</div>
+                    </div>
+                )}
+
                 {sprint.events.map((event: any, i: number) => {
                     const isStart = i === 0;
+                    const startTime = sprint.events[0].timestamp;
                     const splitTime = isStart ? 0 : event.timestamp - startTime;
-                    const label = isStart ? 'START' : (i === gateConfig - 1 ? 'FINISH' : `SPLIT ${i}`);
                     
-                    return (
-                        <div key={i} className="flex justify-between items-center py-1 border-b border-white/5 last:border-0">
-                             <div className="flex items-center gap-2">
-                                <span className={`w-12 font-bold ${isStart ? 'text-gray-500' : 'text-white'}`}>{label}</span>
-                                <span className={`px-1 rounded uppercase text-[10px] ${event.source === 'motion' ? 'bg-pink-900 text-pink-300' : 'bg-blue-900 text-blue-300'}`}>
-                                    {event.source}
-                                </span>
-                             </div>
-                             <div className="text-right">
-                                <span className="text-gray-500 mr-2">{formatTime(event.timestamp)}</span>
-                                {!isStart && <span className="text-[#CEFF00] font-bold">+{ (splitTime / 1000).toFixed(3) }s</span>}
-                             </div>
-                        </div>
-                    );
+                    // Distance Logic
+                    // distanceConfig: index 0 -> Split 1 (Gate 1).
+                    // event 0 = Start (0m). event 1 = Split 1.
+                    const getDistance = (idx: number) => {
+                        if (idx === 0) return 0;
+                        return distanceConfig && distanceConfig[idx - 1] ? distanceConfig[idx - 1] : null;
+                    };
+
+                    const currentDist = getDistance(i);
+                    const prevDist = getDistance(i - 1);
+                    const label = isStart ? 'START' : (currentDist !== null ? `${currentDist}m` : (i === gateConfig - 1 ? 'FINISH' : `SPLIT ${i}`));
+
+                    // Math Calculation
+                    let velocity = 0;
+                    let acceleration = 0;
+                    let velocityDisplay = null;
+                    let accelDisplay = null;
+                    let accelColor = "text-gray-500";
+                    let accelArrow = "";
+
+                    if (!isStart && currentDist !== null && prevDist !== null) {
+                         const timeDelta = (event.timestamp - sprint.events[i-1].timestamp) / 1000; // seconds
+                         const distDelta = currentDist - prevDist;
+                         
+                         if (timeDelta > 0) {
+                             velocity = distDelta / timeDelta;
+                             velocityDisplay = `${velocity.toFixed(2)}`;
+
+                             // Calculate previous segment velocity for acceleration
+                             // If i=1 (first segment), prev velocity is 0 (Start).
+                             let prevVelocity = 0;
+                             if (i > 1) {
+                                  const prevTimeDelta = (sprint.events[i-1].timestamp - sprint.events[i-2].timestamp) / 1000;
+                                  const prevDistDelta = getDistance(i-1)! - getDistance(i-2)!;
+                                  if (prevTimeDelta > 0) {
+                                      prevVelocity = prevDistDelta / prevTimeDelta;
+                                  }
+                             }
+                             
+                             acceleration = (velocity - prevVelocity) / timeDelta;
+                             accelDisplay = `${Math.abs(acceleration).toFixed(2)}`;
+                             
+                             if (acceleration > 0.1) {
+                                 accelColor = "text-green-400";
+                                 accelArrow = "↑";
+                             } else if (acceleration < -0.1) {
+                                 accelColor = "text-red-500";
+                                 accelArrow = "↓";
+                             }
+                         }
+                    }
+
+                    // Conditional Visibility: Hide Start row if sprint is complete
+                    if (isStart && !isRunning) return null;
+
+                    // Render Standard vs Distance Grid
+                    if (distanceConfig && distanceConfig.length > 0) {
+                         // Grid Layout
+                         return (
+                            <div key={i} className={`grid grid-cols-4 items-center py-1 border-b border-white/5 last:border-0 ${isStart ? 'opacity-50' : ''}`}>
+                                <div className="flex flex-col">
+                                    <span className={`font-bold ${isStart ? 'text-gray-500' : 'text-white'}`}>{label}</span>
+                                    <span className={`text-[8px] uppercase px-1 rounded w-min ${event.source === 'motion' ? 'bg-pink-900 text-pink-300' : 'bg-blue-900 text-blue-300'}`}>
+                                        {event.source}
+                                    </span>
+                                </div>
+                                
+                                <div className="text-right text-white">
+                                    {isStart ? '0.00' : (splitTime / 1000).toFixed(3)}s
+                                </div>
+                                
+                                <div className="text-right text-cyan-300 font-bold">
+                                    {velocityDisplay ? `${velocityDisplay}` : '-'}
+                                    {velocityDisplay && <span className="text-[8px] text-gray-500 ml-0.5">m/s</span>}
+                                </div>
+                                
+                                <div className={`text-right font-bold flex items-center justify-end gap-1 ${accelColor}`}>
+                                    {accelArrow}
+                                    {accelDisplay ? accelDisplay : '-'}
+                                    {accelDisplay && <span className="text-[8px] opacity-70">m/s²</span>}
+                                </div>
+                            </div>
+                         );
+                    } else {
+                        // Legacy / No Distance Layout
+                        return (
+                            <div key={i} className="flex justify-between items-center py-1 border-b border-white/5 last:border-0">
+                                <div className="flex items-center gap-2">
+                                    <span className={`w-12 font-bold ${isStart ? 'text-gray-500' : 'text-white'}`}>{label}</span>
+                                    <span className={`px-1 rounded uppercase text-[10px] ${event.source === 'motion' ? 'bg-pink-900 text-pink-300' : 'bg-blue-900 text-blue-300'}`}>
+                                        {event.source}
+                                    </span>
+                                </div>
+                                <div className="text-right">
+                                    <span className="text-gray-500 mr-2">{formatTime(event.timestamp)}</span>
+                                    {!isStart && <span className="text-[#CEFF00] font-bold">+{ (splitTime / 1000).toFixed(3) }s</span>}
+                                </div>
+                            </div>
+                        );
+                    }
                 })}
             </div>
         </div>
@@ -85,7 +181,7 @@ const SprintCard = ({ sprint, index, gateConfig }: { sprint: any, index: number,
 }
 
 const SprintList = () => {
-    const { recentEvents, clearEvents, gateConfig } = useRace();
+    const { recentEvents, clearEvents, gateConfig, distanceConfig } = useRace();
 
     const { sprints, currentProgress } = useMemo(() => {
         // Sort events oldest to newest
@@ -147,6 +243,7 @@ const SprintList = () => {
                         sprint={sprint} 
                         index={sprints.length - 1 - i} 
                         gateConfig={gateConfig}
+                        distanceConfig={distanceConfig}
                     />
                 ))}
             </div>

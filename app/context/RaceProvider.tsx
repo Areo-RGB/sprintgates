@@ -13,10 +13,12 @@ interface RaceContextType {
   triggerGate: (source?: 'manual' | 'motion') => void;
   clearEvents: () => void;
   setGateConfig: (count: number) => void;
+  setDistances: (distances: number[]) => void;
   syncTime: number | null;
   recentEvents: RaceEvent[];
   isConnected: boolean;
   gateConfig: number;
+  distanceConfig: number[];
 }
 
 const RaceContext = createContext<RaceContextType | undefined>(undefined);
@@ -26,6 +28,7 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
   const [offset, setOffset] = useState<number>(0);
   const [recentEvents, setRecentEvents] = useState<RaceEvent[]>([]);
   const [gateConfig, setGateConfigState] = useState<number>(2);
+  const [distanceConfig, setDistanceConfigState] = useState<number[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [syncTime, setSyncTime] = useState<number | null>(null);
   const { playStart, playSplit, playFinish } = useRaceAudio();
@@ -84,6 +87,10 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
         setGateConfigState(message.data.count);
         // Optional: Clear events on config change to avoid invalid states
         setRecentEvents([]); 
+    });
+
+    channel.subscribe('distance-change', (message) => {
+      setDistanceConfigState(message.data.distances);
     });
 
     setAbly(ablyInstance);
@@ -163,8 +170,14 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
       await channel.publish('config-change', { count });
   };
 
+  const setDistances = async (distances: number[]) => {
+    if (!ably || !isConnected) return;
+    const channel = ably.channels.get('my-private-sprint-track');
+    await channel.publish('distance-change', { distances });
+  };
+
   return (
-    <RaceContext.Provider value={{ triggerGate, clearEvents, setGateConfig, syncTime, recentEvents, isConnected, gateConfig }}>
+    <RaceContext.Provider value={{ triggerGate, clearEvents, setGateConfig, setDistances, syncTime, recentEvents, isConnected, gateConfig, distanceConfig }}>
       {children}
     </RaceContext.Provider>
   );
