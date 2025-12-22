@@ -1,5 +1,7 @@
 import { useState, useCallback } from 'react';
-import * as Ably from 'ably';
+import { Transport } from '../services/Transport';
+import * as Ably from 'ably'; // Still used for type reference in old code if any? No, let's keep it if needed or remove.
+// Actually runCalibration signature also needs Update.
 
 export interface CalibrationStats {
     networkOffset: number; // ms (The correction to apply)
@@ -25,38 +27,27 @@ export const useSystemCalibration = () => {
     const [isCalibrating, setIsCalibrating] = useState(false);
 
     // 1. Measure Network Latency (Burst Sync)
-    const measureNetwork = useCallback(async (ablyClient: Ably.Realtime) => {
+    const measureNetwork = useCallback(async (transport: Transport) => {
         const pings: number[] = [];
         const offsets: number[] = [];
         const PING_COUNT = 20;
 
         for (let i = 0; i < PING_COUNT; i++) {
             const start = performance.now();
-            await ablyClient.time(); // Fetch server time
-            const serverTime = await ablyClient.time(); // Actual sync call (Ably SDK caches, but .time() usually fetches)
-            // Note: ably.time() fetches time from server. 
-            // To properly calculate RTT we need to rely on the difference.
-            // Actually, ably.time() returns the server time. 
-            // We can approximate RTT by measuring how long the `await ablyClient.time()` took.
-            
+            // await transport.getServerTime(); // Fetch server time (optional pre-fetch?)
+            const serverTime = await transport.getServerTime(); // Actual sync call
+
             // Allow a small gap
             const end = performance.now();
             const rtt = end - start;
             const localTime = Date.now();
-            
-            // Offset = ServerTime - (LocalTime + RTT/2)
-            // Just a rough approx if Time is close to correct. 
-            // A better way is trusting Ably's internal clock offset if available, 
-            // but we want to measure RTT specifically for health.
+
             pings.push(rtt);
-            
-            // We can calculate offset if we trust Date.now() is monotonic
+
             const estimatedServerTimeAtRequest = serverTime - (rtt / 2);
             /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
-            const offset = estimatedServerTimeAtRequest - localTime; 
-            // We won't use this offset alone since Ably SDK handles time sync, 
-            // but we can use it to verify drift.
-            
+            const offset = estimatedServerTimeAtRequest - localTime;
+
             offsets.push(offset);
 
             // Sleep 50ms
@@ -68,7 +59,7 @@ export const useSystemCalibration = () => {
         const minRTT = Math.min(...pings);
         const bestPingIndex = pings.indexOf(minRTT);
         const bestOffset = offsets[bestPingIndex];
-        
+
         // Variance / StdDev
         const variance = pings.reduce((a, b) => a + Math.pow(b - avgRTT, 2), 0) / pings.length;
         const jitter = Math.sqrt(variance);
@@ -88,7 +79,7 @@ export const useSystemCalibration = () => {
             const actual = end - start;
             totalLag += (actual - 10); // Lag is the excess time
         }
-        
+
         return totalLag / SAMPLES;
     }, []);
 
@@ -97,7 +88,7 @@ export const useSystemCalibration = () => {
         return new Promise<{ fps: number; frameDuration: number }>((resolve) => {
             let frames = 0;
             const startTime = performance.now();
-            
+
             const frameCallback = () => {
                 frames++;
                 const now = performance.now();
@@ -107,9 +98,9 @@ export const useSystemCalibration = () => {
                     resolve({ fps, frameDuration });
                 } else {
                     if (videoElement.requestVideoFrameCallback) {
-                       videoElement.requestVideoFrameCallback(frameCallback);
+                        videoElement.requestVideoFrameCallback(frameCallback);
                     } else {
-                       // Fallback
+                        // Fallback
                         requestAnimationFrame(frameCallback);
                     }
                 }
@@ -123,12 +114,12 @@ export const useSystemCalibration = () => {
         });
     }, []);
 
-    const runCalibration = useCallback(async (ablyClient: Ably.Realtime, videoElement?: HTMLVideoElement) => {
+    const runCalibration = useCallback(async (transport: Transport, videoElement?: HTMLVideoElement) => {
         setIsCalibrating(true);
         try {
             // Run tests
             const [netStats, systemLag] = await Promise.all([
-                measureNetwork(ablyClient),
+                measureNetwork(transport),
                 measureJitter()
             ]);
 
@@ -138,7 +129,7 @@ export const useSystemCalibration = () => {
             }
 
             setStats({
-                networkOffset: netStats.bestOffset, 
+                networkOffset: netStats.bestOffset,
                 networkRTT: netStats.rtt,
                 networkJitter: netStats.jitter,
                 systemLag,

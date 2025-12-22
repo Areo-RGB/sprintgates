@@ -1,7 +1,9 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
-import Ably from 'ably';
+import { Transport } from '../services/Transport';
+import { AblyTransport } from '../services/AblyTransport';
+import { PeerTransport } from '../services/PeerTransport';
 import { CalibrationStats, useSystemCalibration } from '../hooks/useSystemCalibration';
 import { useRaceAudio } from '../hooks/useRaceAudio';
 
@@ -28,192 +30,172 @@ interface RaceContextType {
 const RaceContext = createContext<RaceContextType | undefined>(undefined);
 
 export const RaceProvider = ({ children }: { children: ReactNode }) => {
-  const [ably, setAbly] = useState<Ably.Realtime | null>(null);
-  const [offset, setOffset] = useState<number>(0);
+  const [transport, setTransport] = useState<Transport | null>(null);
   const [recentEvents, setRecentEvents] = useState<RaceEvent[]>([]);
   const [gateConfig, setGateConfigState] = useState<number>(2);
   const [distanceConfig, setDistanceConfigState] = useState<number[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [syncTime, setSyncTime] = useState<number | null>(null);
   const { playStart, playSplit, playFinish } = useRaceAudio();
-  
+
   const { stats: calibrationStats, isCalibrating, runCalibration: runCalibHook } = useSystemCalibration();
 
-  // Wrapper for runCalibration to pass ably instance
+  // Wrapper for runCalibration to pass transport instance
   const runCalibration = async (videoElement?: HTMLVideoElement) => {
-      if (ably) {
-          await runCalibHook(ably, videoElement);
-      }
+    if (transport) {
+      await runCalibHook(transport, videoElement);
+    }
   };
 
   useEffect(() => {
-    // If we have a calibrated network offset, update the main offset
-    if (calibrationStats.isCalibrated) {
-        // We use the calibrated 'bestOffset' which is generally more accurate than the startup burst average
-        // However, we might want to average it with the current offset or just replace it.
-        // Let's replace it to respect the "Calibrate Now" user intent.
-        setOffset(calibrationStats.networkOffset);
+    // If we have a calibrated network offset, update the transport offset
+    if (calibrationStats.isCalibrated && transport) {
+      transport.setOffset(calibrationStats.networkOffset);
     }
-  }, [calibrationStats.isCalibrated, calibrationStats.networkOffset]);
+  }, [calibrationStats.isCalibrated, calibrationStats.networkOffset, transport]);
 
 
   useEffect(() => {
-    if (!process.env.NEXT_PUBLIC_ABLY_KEY) {
-        console.error('Ably API Key is missing!');
-        return;
+    const mode = process.env.NEXT_PUBLIC_TRANSPORT_MODE; // 'ably' or 'peer'
+    console.log('Initializing RaceProvider with transport mode:', mode || 'ably (default)');
+
+    let transportInstance: Transport;
+
+    if (mode === 'peer') {
+      transportInstance = new PeerTransport();
+    } else {
+      transportInstance = new AblyTransport();
     }
 
-    const ablyInstance = new Ably.Realtime({
-      key: process.env.NEXT_PUBLIC_ABLY_KEY,
-      autoConnect: true,
-    });
-
-    ablyInstance.connection.once('connected', async () => {
-      console.log('Connected to Ably!');
-      setIsConnected(true);
-
-      // Startup Sync Burst (Simple)
-      // Only run if not calibrated yet to avoid overwriting a good calibration with a simple one?
-      // Actually, startup always runs first.
-      let totalOffset = 0;
-      const burstCount = 5;
-
-      for (let i = 0; i < burstCount; i++) {
-        const start = performance.now();
-        const serverTime = await ablyInstance.time();
-        const end = performance.now();
-        
-        const latency = (end - start) / 2;
-        const predictedServerTime = serverTime + latency;
-        const currentOffset = predictedServerTime - end;
-        
-        totalOffset += currentOffset;
-        await new Promise((r) => setTimeout(r, 100));
+    transportInstance.connect({
+      onEvent: (topic, data) => {
+        if (topic === 'gate-trigger') {
+          setRecentEvents((prev) => [data, ...prev]);
+        } else if (topic === 'clear-events') {
+          setRecentEvents([]);
+        } else if (topic === 'config-change') {
+          setGateConfigState(data.count);
+          setRecentEvents([]);
+        } else if (topic === 'distance-change') {
+          setDistanceConfigState(data.distances);
+        }
+      },
+      onStatusChange: (status) => {
+        setIsConnected(status);
       }
-
-      setOffset(totalOffset / burstCount);
     });
 
-    const channel = ablyInstance.channels.get('my-private-sprint-track');
-
-    channel.subscribe('gate-trigger', (message) => {
-      setRecentEvents((prev) => [message.data, ...prev]);
-    });
-
-    channel.subscribe('clear-events', () => {
-      setRecentEvents([]);
-    });
-
-    channel.subscribe('config-change', (message) => {
-        setGateConfigState(message.data.count);
-        setRecentEvents([]); 
-    });
-
-    channel.subscribe('distance-change', (message) => {
-      setDistanceConfigState(message.data.distances);
-    });
-
-    setAbly(ablyInstance);
+    setTransport(transportInstance);
 
     return () => {
-      channel.unsubscribe();
-      ablyInstance.close();
+      transportInstance.disconnect();
     };
   }, []);
 
   // Clock ticker for UI
   useEffect(() => {
-    if (!isConnected) return;
+    if (!isConnected || !transport) return;
 
     let animationFrameId: number;
 
     const tick = () => {
-      const now = performance.now();
-      setSyncTime(now + offset);
+      setSyncTime(transport.now());
       animationFrameId = requestAnimationFrame(tick);
     };
 
     tick();
 
     return () => cancelAnimationFrame(animationFrameId);
-  }, [isConnected, offset]);
+  }, [isConnected, transport]);
 
   // Audio effect based on recent events
   const prevEventsLength = useRef(0);
   useEffect(() => {
-      if (recentEvents.length > prevEventsLength.current) {
-          const position = (recentEvents.length - 1) % gateConfig;
-          
-          if (position === 0) {
-              playStart();
-          } else if (position === gateConfig - 1) {
-              playFinish();
-          } else {
-              playSplit();
-          }
+    if (recentEvents.length > prevEventsLength.current) {
+      const position = (recentEvents.length - 1) % gateConfig;
+
+      if (position === 0) {
+        playStart();
+      } else if (position === gateConfig - 1) {
+        playFinish();
+      } else {
+        playSplit();
       }
-      prevEventsLength.current = recentEvents.length;
+    }
+    prevEventsLength.current = recentEvents.length;
   }, [recentEvents, gateConfig, playStart, playSplit, playFinish]);
 
 
   const triggerGate = async (source: 'manual' | 'motion' = 'manual', metadata?: { processingLatency?: number }) => {
-    if (!ably || !isConnected) return;
+    if (!transport || !isConnected) return;
     const now = performance.now();
-    let unifiedTime = now + offset;
-    
+    // Transport.now() is synced time, but here we calculate event timestamp based on 'now' minus lag
+    // Wait, transport.now() = perf.now() + offset.
+    // If we want unified time of the EVENT which happened at 'now' (local perf time).
+    // UnifiedTime = LocalEventTime + Offset.
+    // LocalEventTime = now - lag. (Lag is passed from calibration but we assume 'now' is raw capture time?)
+    // Actually in original code:
+    // unifiedTime = now + offset;
+    // unifiedTime -= calibrationStats.systemLag;
+    // ...
+    // So logic remains same, just need transport's offset?
+    // But Transport encapsulates offset.
+    // So transport.now() is basically (perf.now() + offset).
+    // So unifiedTime = transport.now().
+    // Then apply substractions.
+    // However, strictly speaking, if 'now' was captured a few ms ago (passed in metadata? No, 'now' is strictly 'performance.now()' at function call start).
+    // So yes, verify logic:
+
+    let unifiedTime = transport.now();
+
     // Apply Calibration Compensation
     if (calibrationStats.isCalibrated) {
-         // Subtract System Jitter (Lag)
-         // If system is lagging, 'now' is later than actual event, so we subtract lag.
-         unifiedTime -= calibrationStats.systemLag;
+      // Subtract System Jitter (Lag)
+      unifiedTime -= calibrationStats.systemLag;
 
-         if (source === 'motion') {
-             // 1. Frame Duration Center (Statistical)
-             unifiedTime -= (calibrationStats.frameDuration / 2);
+      if (source === 'motion') {
+        // 1. Frame Duration Center (Statistical)
+        unifiedTime -= (calibrationStats.frameDuration / 2);
 
-             // 2. Processing Latency (Specific)
-             if (metadata?.processingLatency) {
-                 unifiedTime -= metadata.processingLatency;
-             }
-         }
+        // 2. Processing Latency (Specific)
+        if (metadata?.processingLatency) {
+          unifiedTime -= metadata.processingLatency;
+        }
+      }
     }
 
-    const channel = ably.channels.get('my-private-sprint-track');
-    await channel.publish('gate-trigger', { timestamp: unifiedTime, source });
+    await transport.publish('gate-trigger', { timestamp: unifiedTime, source });
   };
 
   const clearEvents = async () => {
-    if (!ably || !isConnected) return;
-    const channel = ably.channels.get('my-private-sprint-track');
-    await channel.publish('clear-events', {});
+    if (!transport || !isConnected) return;
+    await transport.publish('clear-events', {});
   };
 
   const setGateConfig = async (count: number) => {
-      if (!ably || !isConnected) return;
-      const channel = ably.channels.get('my-private-sprint-track');
-      await channel.publish('config-change', { count });
+    if (!transport || !isConnected) return;
+    await transport.publish('config-change', { count });
   };
 
   const setDistances = async (distances: number[]) => {
-    if (!ably || !isConnected) return;
-    const channel = ably.channels.get('my-private-sprint-track');
-    await channel.publish('distance-change', { distances });
+    if (!transport || !isConnected) return;
+    await transport.publish('distance-change', { distances });
   };
 
   return (
-    <RaceContext.Provider value={{ 
-        triggerGate, 
-        clearEvents, 
-        setGateConfig, 
-        setDistances, 
-        syncTime, 
-        recentEvents, 
-        isConnected, 
-        gateConfig, 
-        distanceConfig,
-        runCalibration,
-        calibrationStats,
-        isCalibrating
+    <RaceContext.Provider value={{
+      triggerGate,
+      clearEvents,
+      setGateConfig,
+      setDistances,
+      syncTime,
+      recentEvents,
+      isConnected,
+      gateConfig,
+      distanceConfig,
+      runCalibration,
+      calibrationStats,
+      isCalibrating
     }}>
       {children}
     </RaceContext.Provider>
