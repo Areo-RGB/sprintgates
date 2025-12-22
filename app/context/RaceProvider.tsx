@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import Ably from 'ably';
+import { CalibrationStats, useSystemCalibration } from '../hooks/useSystemCalibration';
 import { useRaceAudio } from '../hooks/useRaceAudio';
 
 interface RaceEvent {
@@ -10,7 +11,7 @@ interface RaceEvent {
 }
 
 interface RaceContextType {
-  triggerGate: (source?: 'manual' | 'motion') => void;
+  triggerGate: (source?: 'manual' | 'motion', metadata?: { processingLatency?: number }) => void;
   clearEvents: () => void;
   setGateConfig: (count: number) => void;
   setDistances: (distances: number[]) => void;
@@ -19,6 +20,9 @@ interface RaceContextType {
   isConnected: boolean;
   gateConfig: number;
   distanceConfig: number[];
+  runCalibration: (videoElement?: HTMLVideoElement) => Promise<void>;
+  calibrationStats: CalibrationStats;
+  isCalibrating: boolean;
 }
 
 const RaceContext = createContext<RaceContextType | undefined>(undefined);
@@ -32,6 +36,26 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [syncTime, setSyncTime] = useState<number | null>(null);
   const { playStart, playSplit, playFinish } = useRaceAudio();
+  
+  const { stats: calibrationStats, isCalibrating, runCalibration: runCalibHook } = useSystemCalibration();
+
+  // Wrapper for runCalibration to pass ably instance
+  const runCalibration = async (videoElement?: HTMLVideoElement) => {
+      if (ably) {
+          await runCalibHook(ably, videoElement);
+      }
+  };
+
+  useEffect(() => {
+    // If we have a calibrated network offset, update the main offset
+    if (calibrationStats.isCalibrated) {
+        // We use the calibrated 'bestOffset' which is generally more accurate than the startup burst average
+        // However, we might want to average it with the current offset or just replace it.
+        // Let's replace it to respect the "Calibrate Now" user intent.
+        setOffset(calibrationStats.networkOffset);
+    }
+  }, [calibrationStats.isCalibrated, calibrationStats.networkOffset]);
+
 
   useEffect(() => {
     if (!process.env.NEXT_PUBLIC_ABLY_KEY) {
@@ -48,7 +72,9 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
       console.log('Connected to Ably!');
       setIsConnected(true);
 
-      // Sync Burst
+      // Startup Sync Burst (Simple)
+      // Only run if not calibrated yet to avoid overwriting a good calibration with a simple one?
+      // Actually, startup always runs first.
       let totalOffset = 0;
       const burstCount = 5;
 
@@ -57,16 +83,11 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
         const serverTime = await ablyInstance.time();
         const end = performance.now();
         
-        // Latency is half the round trip time
         const latency = (end - start) / 2;
-        // Predicted server time when we received the response
         const predictedServerTime = serverTime + latency;
-        // Offset = ServerTime - LocalTime
         const currentOffset = predictedServerTime - end;
         
         totalOffset += currentOffset;
-        
-        // Small delay between pings
         await new Promise((r) => setTimeout(r, 100));
       }
 
@@ -85,7 +106,6 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
 
     channel.subscribe('config-change', (message) => {
         setGateConfigState(message.data.count);
-        // Optional: Clear events on config change to avoid invalid states
         setRecentEvents([]); 
     });
 
@@ -119,23 +139,9 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
   }, [isConnected, offset]);
 
   // Audio effect based on recent events
-  // We need to detect when a NEW event comes in to play sound.
   const prevEventsLength = useRef(0);
   useEffect(() => {
       if (recentEvents.length > prevEventsLength.current) {
-          // New event(s) arrived.
-          const newEvent = recentEvents[0]; // Most recent is at top because of unshift logic [new, ...old]
-          
-          // Determine position in sprint
-          // Sprints are chunks of 'gateConfig' size.
-          // Since we reverse the array in UI but store it [newest, ..... oldest],
-          // The "index in current sprint" depends on total count.
-          // Actually, let's just count backwards from total triggers.
-          
-          // Total triggers processed so far = recentEvents.length.
-          // The index of the new trigger (1-based) is recentEvents.length.
-          // Position = (recentEvents.length - 1) % gateConfig
-          
           const position = (recentEvents.length - 1) % gateConfig;
           
           if (position === 0) {
@@ -150,10 +156,28 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
   }, [recentEvents, gateConfig, playStart, playSplit, playFinish]);
 
 
-  const triggerGate = async (source: 'manual' | 'motion' = 'manual') => {
+  const triggerGate = async (source: 'manual' | 'motion' = 'manual', metadata?: { processingLatency?: number }) => {
     if (!ably || !isConnected) return;
     const now = performance.now();
-    const unifiedTime = now + offset;
+    let unifiedTime = now + offset;
+    
+    // Apply Calibration Compensation
+    if (calibrationStats.isCalibrated) {
+         // Subtract System Jitter (Lag)
+         // If system is lagging, 'now' is later than actual event, so we subtract lag.
+         unifiedTime -= calibrationStats.systemLag;
+
+         if (source === 'motion') {
+             // 1. Frame Duration Center (Statistical)
+             unifiedTime -= (calibrationStats.frameDuration / 2);
+
+             // 2. Processing Latency (Specific)
+             if (metadata?.processingLatency) {
+                 unifiedTime -= metadata.processingLatency;
+             }
+         }
+    }
+
     const channel = ably.channels.get('my-private-sprint-track');
     await channel.publish('gate-trigger', { timestamp: unifiedTime, source });
   };
@@ -177,7 +201,20 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <RaceContext.Provider value={{ triggerGate, clearEvents, setGateConfig, setDistances, syncTime, recentEvents, isConnected, gateConfig, distanceConfig }}>
+    <RaceContext.Provider value={{ 
+        triggerGate, 
+        clearEvents, 
+        setGateConfig, 
+        setDistances, 
+        syncTime, 
+        recentEvents, 
+        isConnected, 
+        gateConfig, 
+        distanceConfig,
+        runCalibration,
+        calibrationStats,
+        isCalibrating
+    }}>
       {children}
     </RaceContext.Provider>
   );

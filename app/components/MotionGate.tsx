@@ -36,7 +36,7 @@ const MotionGate = () => {
     osc.stop(ctx.currentTime + 0.1);
   };
 
-  const handleMotion = useCallback((delta: number) => {
+  const handleMotion = useCallback((delta: number, metadata?: { processingLatency: number }) => {
     // Delta is average pixel difference (0-255).
     // Normalize to 0-100 for display?
     // Let's assume substantial motion is > 5-10.
@@ -48,7 +48,7 @@ const MotionGate = () => {
             const now = performance.now();
             if (now - lastTrigger > 2000) { // 2 second cooldown
                 setLastTrigger(now);
-                triggerGate('motion');
+                triggerGate('motion', metadata); // Pass metadata to RaceProvider
                 
                 // Feedback
                 if (navigator.vibrate) navigator.vibrate([200]);

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 interface UseCanvasMotionProps {
-  onMotion: (delta: number) => void;
+  onMotion: (delta: number, metadata?: { processingLatency: number }) => void;
   sensitivity: number;
   isArmed: boolean;
 }
@@ -16,7 +16,7 @@ export const useCanvasMotion = ({ onMotion, sensitivity, isArmed }: UseCanvasMot
     if (!videoRef.current) return;
 
     if (!canvasRef.current) {
-      canvasRef.current = document.createElement('canvas');
+      canvasRef.current = document.createElement('canvas'); // Off-screen canvas
     }
   }, []);
 
@@ -24,14 +24,17 @@ export const useCanvasMotion = ({ onMotion, sensitivity, isArmed }: UseCanvasMot
     const video = videoRef.current;
     if (!video || !isArmed) {
       if (requestRef.current) {
-        if (video && 'cancelVideoFrameCallback' in video) {
+         if (video && 'cancelVideoFrameCallback' in video) {
             (video as any).cancelVideoFrameCallback(requestRef.current);
-        }
+         }
       }
       return;
     }
 
-    const processFrame = () => {
+    const processFrame = (now: number, metadata: any) => {
+      // Start processing timer
+      const processingStart = performance.now();
+
       if (!video || !canvasRef.current) return;
 
       const width = video.videoWidth;
@@ -80,7 +83,12 @@ export const useCanvasMotion = ({ onMotion, sensitivity, isArmed }: UseCanvasMot
               }
               
               const averageDelta = totalDelta / pixelCount;
-              onMotion(averageDelta);
+              
+              // End processing timer
+              const processingEnd = performance.now();
+              const processingLatency = processingEnd - processingStart;
+              
+              onMotion(averageDelta, { processingLatency });
           }
 
           // Store current frame for next comparison
