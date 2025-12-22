@@ -1,65 +1,98 @@
-import Image from "next/image";
+'use client';
+
+import { useRace } from './context/RaceProvider';
+import { useEffect, useState } from 'react';
+import MotionGate from './components/MotionGate';
+import SprintList from './components/SprintList';
+
+const formatTime = (timestamp: number | null) => {
+  if (!timestamp) return '00:00:00.000';
+  const date = new Date(timestamp);
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  const seconds = date.getSeconds().toString().padStart(2, '0');
+  const ms = date.getMilliseconds().toString().padStart(3, '0');
+  return `${hours}:${minutes}:${seconds}.${ms}`;
+};
 
 export default function Home() {
+  const { triggerGate, syncTime, isConnected, gateConfig, setGateConfig } = useRace();
+  const [mounted, setMounted] = useState(false);
+  const [mode, setMode] = useState<'manual' | 'motion'>('manual');
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) return null;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="flex flex-col h-screen w-full bg-black text-[#CEFF00] overflow-hidden">
+      {/* Top: Clock & Controls */}
+      <div className="flex-none p-4 flex flex-col gap-2 border-b border-[#CEFF00]/30 select-none bg-zinc-900/80">
+        <div className="flex flex-col sm:flex-row justify-between items-center gap-3 sm:gap-0">
+            <div className="flex items-center gap-2 order-2 sm:order-1 w-full sm:w-auto justify-center sm:justify-start">
+                <button 
+                    onClick={() => setMode(mode === 'motion' ? 'manual' : 'motion')}
+                    className={`text-xs px-3 py-1 rounded border uppercase tracking-wider whitespace-nowrap transition-colors ${
+                        mode === 'motion' 
+                        ? 'bg-[#FF00FF]/20 border-[#FF00FF]/50 text-[#FF00FF] hover:bg-[#FF00FF]/30' 
+                        : 'bg-[#CEFF00]/20 border-[#CEFF00]/50 text-[#CEFF00] hover:bg-[#CEFF00]/30'
+                    }`}
+                >
+                    {mode === 'motion' ? 'Exit Camera' : '📷 Motion Gate'}
+                </button>
+                
+                {/* Gate Config dropdown/toggle */}
+                 <div className="flex items-center border border-[#CEFF00]/30 rounded overflow-hidden flex-shrink-0">
+                    {[2, 3, 4].map((count) => (
+                        <button
+                            key={count}
+                            onClick={() => setGateConfig(count)}
+                            className={`px-3 py-1 text-xs font-bold ${gateConfig === count ? 'bg-[#CEFF00] text-black' : 'bg-transparent text-gray-500 hover:text-white'}`}
+                        >
+                            {count}G
+                        </button>
+                    ))}
+                </div>
+            </div>
+            <div className="text-4xl sm:text-4xl font-mono font-black tracking-widest text-shadow-neon order-1 sm:order-2">
+            {formatTime(syncTime)}
+            </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        {!isConnected && <div className="text-xs text-center text-red-500 animate-pulse">CONNECTING TO RACE SERVER...</div>}
+      </div>
+
+      {/* Action Slot */}
+      <div className="flex-none h-[45vh] p-4 w-full flex items-center justify-center">
+        {mode === 'motion' ? (
+            <div className="relative w-full h-full max-w-md mx-auto">
+                 <MotionGate />
+                 <button 
+                    onClick={() => setMode('manual')}
+                    className="absolute top-2 right-2 z-50 bg-black/60 text-white hover:text-red-500 p-2 rounded-full border border-white/20 backdrop-blur-md transition-colors"
+                    title="Exit Motion Mode"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+        ) : (
+            <button
+                onClick={() => triggerGate('manual')}
+                disabled={!isConnected}
+                className="w-full h-full max-w-md mx-auto rounded-3xl bg-[#CEFF00] text-black text-5xl font-black uppercase tracking-tighter active:scale-95 transition-transform duration-75 shadow-[0_0_50px_rgba(206,255,0,0.5)] border-4 border-transparent hover:border-white disabled:opacity-50 disabled:grayscale flex items-center justify-center text-center"
+            >
+                {isConnected ? 'Trigger\nGate' : 'Connecting...'}
+            </button>
+        )}
+      </div>
+
+      {/* Bottom: Sprint List */}
+      <div className="flex-1 bg-zinc-900/50 border-t-2 border-[#CEFF00]/20 overflow-hidden flex flex-col min-h-0">
+        <SprintList />
+      </div>
     </div>
   );
 }
