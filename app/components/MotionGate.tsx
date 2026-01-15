@@ -4,15 +4,26 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useRace } from '../context/RaceProvider';
 import { useCanvasMotion } from '../hooks/useCanvasMotion';
 
+// Configuration for multi-frame confirmation
+const MOTION_CONFIRMATION_CONFIG = {
+  DEFAULT_CONFIRM_FRAMES: 2,  // Require motion in N consecutive frames
+  MIN_CONFIRM_FRAMES: 1,      // Minimum (1 = no confirmation, instant trigger)
+  MAX_CONFIRM_FRAMES: 5,      // Maximum (5 frames = ~166ms at 30fps)
+};
+
 const MotionGate = () => {
   const { triggerGate } = useRace();
-  const [sensitivity, setSensitivity] = useState(25); // 0-100 scale? Logic delta might be 0-255.
+  const [sensitivity, setSensitivity] = useState(25);
   const [isArmed, setIsArmed] = useState(false);
   const [motionLevel, setMotionLevel] = useState(0);
   const [torchOn, setTorchOn] = useState(false);
   const [lastTrigger, setLastTrigger] = useState(0);
+  const [confirmFrames, setConfirmFrames] = useState(MOTION_CONFIRMATION_CONFIG.DEFAULT_CONFIRM_FRAMES);
   const streamRef = useRef<MediaStream | null>(null);
 
+  // Multi-frame confirmation tracking
+  const motionHistoryRef = useRef<{ detected: boolean; metadata: { processingLatency: number; cameraLatency: number | null } | undefined }[]>([]);
+  
   // Audio Context for Beep
   const audioContextRef = useRef<AudioContext | null>(null);
 
@@ -27,7 +38,7 @@ const MotionGate = () => {
     const gain = ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, ctx.currentTime); // High pitch A5
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
     osc.connect(gain);
     gain.connect(ctx.destination);
     
@@ -37,25 +48,44 @@ const MotionGate = () => {
   };
 
   const handleMotion = useCallback((delta: number, metadata?: { processingLatency: number; cameraLatency: number | null }) => {
-    // Delta is average pixel difference (0-255).
-    // Normalize to 0-100 for display?
-    // Let's assume substantial motion is > 5-10.
-    
     setMotionLevel(delta);
+    
+    const motionDetected = delta > sensitivity;
+    
+    // Add to motion history
+    motionHistoryRef.current.push({ detected: motionDetected, metadata });
+    
+    // Keep only the last N frames we need
+    if (motionHistoryRef.current.length > confirmFrames) {
+        motionHistoryRef.current.shift();
+    }
 
     if (isArmed) {
-        if (delta > sensitivity) {
+        // Check if we have enough consecutive frames with motion
+        const hasEnoughFrames = motionHistoryRef.current.length >= confirmFrames;
+        const allFramesHaveMotion = motionHistoryRef.current.every(frame => frame.detected);
+        
+        if (hasEnoughFrames && allFramesHaveMotion) {
             const now = performance.now();
             if (now - lastTrigger > 2000) { // 2 second cooldown
                 setLastTrigger(now);
-                triggerGate('motion', metadata); // Pass metadata to RaceProvider
+                
+                // Use the metadata from the FIRST frame that detected motion
+                // (this is when the actual crossing happened)
+                const firstMotionFrame = motionHistoryRef.current[0];
+                triggerGate('motion', firstMotionFrame.metadata);
+                
+                // Clear history after trigger to prevent immediate re-trigger
+                motionHistoryRef.current = [];
                 
                 // Feedback
                 if (navigator.vibrate) navigator.vibrate([200]);
+                
+                console.log(`[MotionGate] Triggered after ${confirmFrames} consecutive frames`);
             }
         }
     }
-  }, [isArmed, sensitivity, lastTrigger, triggerGate]);
+  }, [isArmed, sensitivity, lastTrigger, triggerGate, confirmFrames]);
 
   const { videoRef } = useCanvasMotion({ onMotion: handleMotion, sensitivity, isArmed });
 
@@ -160,6 +190,22 @@ const MotionGate = () => {
                 className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-[#FF00FF]"
              />
              <span className="text-[#FF00FF] font-mono font-bold w-6 text-right text-xs">{sensitivity}</span>
+        </div>
+
+        {/* Multi-frame confirmation slider */}
+        <div className="flex items-center gap-3">
+             <span className="text-white font-mono text-[10px] uppercase w-16">Confirm</span>
+             <input 
+                type="range" 
+                min={MOTION_CONFIRMATION_CONFIG.MIN_CONFIRM_FRAMES}
+                max={MOTION_CONFIRMATION_CONFIG.MAX_CONFIRM_FRAMES}
+                value={confirmFrames} 
+                onChange={(e) => setConfirmFrames(Number(e.target.value))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-[#00FFFF]"
+             />
+             <span className="text-[#00FFFF] font-mono font-bold w-12 text-right text-[10px]">
+                {confirmFrames}f
+             </span>
         </div>
 
         <div className="flex gap-3">

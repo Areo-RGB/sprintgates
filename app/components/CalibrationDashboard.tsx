@@ -66,6 +66,15 @@ const CalibrationDashboard = () => {
                                     <span>Jitter: ±{calibrationStats.networkJitter.toFixed(1)}ms</span>
                                     <span>Offset: {calibrationStats.networkOffset.toFixed(1)}ms</span>
                                 </div>
+                                {/* Asymmetric Latency Breakdown */}
+                                <div className="flex justify-between text-[10px] font-mono pt-1 border-t border-white/5">
+                                    <span className="text-orange-400">
+                                        ↑ Upload: {calibrationStats.uploadLatency.toFixed(1)}ms
+                                    </span>
+                                    <span className="text-cyan-400">
+                                        ↓ Download: {calibrationStats.downloadLatency.toFixed(1)}ms
+                                    </span>
+                                </div>
                             </div>
 
                             {/* System */}
