@@ -5,7 +5,7 @@ import { useRace } from '../context/RaceProvider';
 import { useCanvasMotion } from '../hooks/useCanvasMotion'; // Type only maybe? 
 
 const CalibrationDashboard = () => {
-    const { calibrationStats, runCalibration, isCalibrating, isConnected } = useRace();
+    const { calibrationStats, runCalibration, isCalibrating, isConnected, lastSyncAge } = useRace();
     const [isOpen, setIsOpen] = useState(false);
 
     const getHealthColor = (error: number) => {
@@ -80,6 +80,10 @@ const CalibrationDashboard = () => {
                                     <span>Frame: {calibrationStats.frameDuration.toFixed(1)}ms</span>
                                     <span>Evt Loop Lag: {calibrationStats.systemLag.toFixed(2)}ms</span>
                                 </div>
+                                <div className="text-[9px] text-green-400/70 font-mono flex items-center gap-1">
+                                    <span>✓</span>
+                                    <span>Camera latency: Hardware timestamps (Android Chrome)</span>
+                                </div>
                             </div>
 
                             {/* Total Accuracy Estimation */}
@@ -88,6 +92,16 @@ const CalibrationDashboard = () => {
                                 <div className={`text-center font-black font-mono text-2xl ${getHealthColor(stabilityScore)}`}>
                                     ±{stabilityScore.toFixed(1)}ms
                                 </div>
+                            </div>
+
+                            {/* Sync Status */}
+                            <div className="flex justify-between items-center text-[10px] text-white/40 font-mono px-1">
+                                <span>🔄 Auto-sync every 30s</span>
+                                <span>
+                                    Last sync: {lastSyncAge !== null ? (
+                                        lastSyncAge < 60 ? `${lastSyncAge}s ago` : `${Math.floor(lastSyncAge / 60)}m ago`
+                                    ) : 'never'}
+                                </span>
                             </div>
 
                             {/* Warning if uncalibrated */}

@@ -1,7 +1,25 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
+
+// VideoFrameCallbackMetadata interface (Chrome/Android specific fields)
+interface VideoFrameCallbackMetadata {
+  presentationTime: number;      // When frame was presented (DOMHighResTimeStamp)
+  expectedDisplayTime: number;   // Expected display time
+  width: number;                 // Frame width
+  height: number;                // Frame height
+  mediaTime: number;             // Media timeline position
+  presentedFrames: number;       // Frame counter
+  processingDuration?: number;   // Processing time (optional)
+  captureTime?: number;          // Hardware capture timestamp (Android Chrome)
+  receiveTime?: number;          // When browser received frame (optional)
+}
+
+interface MotionMetadata {
+  processingLatency: number;     // Time spent in our detection algorithm
+  cameraLatency: number | null;  // Camera pipeline latency (null if unavailable)
+}
 
 interface UseCanvasMotionProps {
-  onMotion: (delta: number, metadata?: { processingLatency: number }) => void;
+  onMotion: (delta: number, metadata?: MotionMetadata) => void;
   sensitivity: number;
   isArmed: boolean;
 }
@@ -11,6 +29,10 @@ export const useCanvasMotion = ({ onMotion, sensitivity, isArmed }: UseCanvasMot
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const previousFrameRef = useRef<Uint8ClampedArray | null>(null);
   const requestRef = useRef<number | undefined>(undefined);
+  
+  // Track camera latency for logging/debugging
+  const cameraLatencyRef = useRef<number[]>([]);
+  const lastLogTimeRef = useRef<number>(0);
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -28,10 +50,12 @@ export const useCanvasMotion = ({ onMotion, sensitivity, isArmed }: UseCanvasMot
             (video as any).cancelVideoFrameCallback(requestRef.current);
          }
       }
+      // Reset latency tracking when disarmed
+      cameraLatencyRef.current = [];
       return;
     }
 
-    const processFrame = (now: number, metadata: any) => {
+    const processFrame = (now: number, metadata: VideoFrameCallbackMetadata) => {
       // Start processing timer
       const processingStart = performance.now();
 
@@ -88,7 +112,29 @@ export const useCanvasMotion = ({ onMotion, sensitivity, isArmed }: UseCanvasMot
               const processingEnd = performance.now();
               const processingLatency = processingEnd - processingStart;
               
-              onMotion(averageDelta, { processingLatency });
+              // Calculate camera pipeline latency from metadata
+              let cameraLatency: number | null = null;
+              
+              if (metadata.captureTime !== undefined) {
+                  // captureTime is a DOMHighResTimeStamp (same timebase as performance.now())
+                  // Camera latency = when we received the frame - when it was captured
+                  cameraLatency = now - metadata.captureTime;
+                  
+                  // Track for averaging/logging
+                  cameraLatencyRef.current.push(cameraLatency);
+                  if (cameraLatencyRef.current.length > 30) {
+                      cameraLatencyRef.current.shift(); // Keep last 30 samples
+                  }
+                  
+                  // Log average every 5 seconds
+                  if (processingEnd - lastLogTimeRef.current > 5000 && cameraLatencyRef.current.length > 0) {
+                      const avgLatency = cameraLatencyRef.current.reduce((a, b) => a + b, 0) / cameraLatencyRef.current.length;
+                      console.log(`[CameraLatency] Avg: ${avgLatency.toFixed(1)}ms (${cameraLatencyRef.current.length} samples)`);
+                      lastLogTimeRef.current = processingEnd;
+                  }
+              }
+              
+              onMotion(averageDelta, { processingLatency, cameraLatency });
           }
 
           // Store current frame for next comparison

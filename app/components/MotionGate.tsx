@@ -36,7 +36,7 @@ const MotionGate = () => {
     osc.stop(ctx.currentTime + 0.1);
   };
 
-  const handleMotion = useCallback((delta: number, metadata?: { processingLatency: number }) => {
+  const handleMotion = useCallback((delta: number, metadata?: { processingLatency: number; cameraLatency: number | null }) => {
     // Delta is average pixel difference (0-255).
     // Normalize to 0-100 for display?
     // Let's assume substantial motion is > 5-10.

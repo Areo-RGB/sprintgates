@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef, ReactNode, useCallback } from 'react';
 import Ably from 'ably';
 import { CalibrationStats, useSystemCalibration } from '../hooks/useSystemCalibration';
 import { useRaceAudio } from '../hooks/useRaceAudio';
@@ -11,7 +11,7 @@ interface RaceEvent {
 }
 
 interface RaceContextType {
-  triggerGate: (source?: 'manual' | 'motion', metadata?: { processingLatency?: number }) => void;
+  triggerGate: (source?: 'manual' | 'motion', metadata?: { processingLatency?: number; cameraLatency?: number | null }) => void;
   clearEvents: () => void;
   setGateConfig: (count: number) => void;
   setDistances: (distances: number[]) => void;
@@ -23,9 +23,19 @@ interface RaceContextType {
   runCalibration: (videoElement?: HTMLVideoElement) => Promise<void>;
   calibrationStats: CalibrationStats;
   isCalibrating: boolean;
+  lastSyncAge: number | null; // How long ago was the last sync (seconds)
 }
 
 const RaceContext = createContext<RaceContextType | undefined>(undefined);
+
+// Drift correction configuration
+const DRIFT_CORRECTION_CONFIG = {
+  SYNC_INTERVAL_MS: 30000,        // Sync every 30 seconds
+  SAMPLES_PER_SYNC: 5,            // Number of samples per sync burst
+  SMOOTHING_FACTOR: 0.3,          // EMA alpha (0.3 = 30% new, 70% old)
+  MAX_CORRECTION_MS: 50,          // Max single-step correction (prevents jumps)
+  OUTLIER_THRESHOLD_MS: 200,      // Reject samples with RTT above this
+};
 
 export const RaceProvider = ({ children }: { children: ReactNode }) => {
   const [ably, setAbly] = useState<Ably.Realtime | null>(null);
@@ -35,9 +45,15 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
   const [distanceConfig, setDistanceConfigState] = useState<number[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [syncTime, setSyncTime] = useState<number | null>(null);
+  const [lastSyncTimestamp, setLastSyncTimestamp] = useState<number | null>(null);
+  const [lastSyncAge, setLastSyncAge] = useState<number | null>(null);
   const { playStart, playSplit, playFinish } = useRaceAudio();
   
   const { stats: calibrationStats, isCalibrating, runCalibration: runCalibHook } = useSystemCalibration();
+  
+  // Refs for drift correction
+  const isSyncingRef = useRef(false);
+  const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Wrapper for runCalibration to pass ably instance
   const runCalibration = async (videoElement?: HTMLVideoElement) => {
@@ -46,6 +62,67 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
       }
   };
 
+  // Drift correction sync function
+  const performDriftSync = useCallback(async (ablyClient: Ably.Realtime, currentOffset: number): Promise<number> => {
+    if (isSyncingRef.current) return currentOffset;
+    isSyncingRef.current = true;
+
+    try {
+      const samples: { rtt: number; offset: number }[] = [];
+      const { SAMPLES_PER_SYNC, OUTLIER_THRESHOLD_MS, SMOOTHING_FACTOR, MAX_CORRECTION_MS } = DRIFT_CORRECTION_CONFIG;
+
+      // Collect samples
+      for (let i = 0; i < SAMPLES_PER_SYNC; i++) {
+        const start = performance.now();
+        const serverTime = await ablyClient.time();
+        const end = performance.now();
+        
+        const rtt = end - start;
+        
+        // Reject outliers (high RTT indicates network congestion)
+        if (rtt < OUTLIER_THRESHOLD_MS) {
+          const latency = rtt / 2;
+          const predictedServerTime = serverTime + latency;
+          const sampleOffset = predictedServerTime - end;
+          samples.push({ rtt, offset: sampleOffset });
+        }
+
+        await new Promise(r => setTimeout(r, 50));
+      }
+
+      if (samples.length === 0) {
+        console.warn('[DriftSync] All samples rejected as outliers');
+        return currentOffset;
+      }
+
+      // Use best sample (lowest RTT = most accurate)
+      samples.sort((a, b) => a.rtt - b.rtt);
+      const bestSample = samples[0];
+      const newOffset = bestSample.offset;
+
+      // Calculate correction with EMA smoothing
+      const rawCorrection = newOffset - currentOffset;
+      
+      // Clamp correction to prevent sudden jumps
+      const clampedCorrection = Math.max(-MAX_CORRECTION_MS, Math.min(MAX_CORRECTION_MS, rawCorrection));
+      
+      // Apply EMA: smoothedOffset = α * newValue + (1-α) * oldValue
+      const smoothedOffset = currentOffset + (clampedCorrection * SMOOTHING_FACTOR);
+
+      console.log(`[DriftSync] Samples: ${samples.length}, Best RTT: ${bestSample.rtt.toFixed(1)}ms, ` +
+                  `Raw drift: ${rawCorrection.toFixed(2)}ms, Applied: ${(clampedCorrection * SMOOTHING_FACTOR).toFixed(2)}ms`);
+
+      setLastSyncTimestamp(Date.now());
+      return smoothedOffset;
+
+    } catch (error) {
+      console.error('[DriftSync] Error:', error);
+      return currentOffset;
+    } finally {
+      isSyncingRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     // If we have a calibrated network offset, update the main offset
     if (calibrationStats.isCalibrated) {
@@ -53,6 +130,7 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
         // However, we might want to average it with the current offset or just replace it.
         // Let's replace it to respect the "Calibrate Now" user intent.
         setOffset(calibrationStats.networkOffset);
+        setLastSyncTimestamp(Date.now());
     }
   }, [calibrationStats.isCalibrated, calibrationStats.networkOffset]);
 
@@ -91,7 +169,10 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
         await new Promise((r) => setTimeout(r, 100));
       }
 
-      setOffset(totalOffset / burstCount);
+      const initialOffset = totalOffset / burstCount;
+      setOffset(initialOffset);
+      setLastSyncTimestamp(Date.now());
+      console.log(`[Startup Sync] Initial offset: ${initialOffset.toFixed(2)}ms`);
     });
 
     const channel = ablyInstance.channels.get('my-private-sprint-track');
@@ -120,6 +201,55 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
       ablyInstance.close();
     };
   }, []);
+
+  // Periodic Drift Correction
+  useEffect(() => {
+    if (!ably || !isConnected) return;
+
+    // Start periodic sync after initial connection
+    const startPeriodicSync = () => {
+      syncIntervalRef.current = setInterval(async () => {
+        if (ably && isConnected) {
+          // Use functional update to get current offset
+          setOffset(currentOffset => {
+            // Fire the async sync but return current value
+            // The sync will update offset when complete
+            performDriftSync(ably, currentOffset).then(newOffset => {
+              if (newOffset !== currentOffset) {
+                setOffset(newOffset);
+              }
+            });
+            return currentOffset;
+          });
+        }
+      }, DRIFT_CORRECTION_CONFIG.SYNC_INTERVAL_MS);
+    };
+
+    // Delay first periodic sync to avoid overlapping with startup
+    const initialDelay = setTimeout(startPeriodicSync, DRIFT_CORRECTION_CONFIG.SYNC_INTERVAL_MS);
+
+    return () => {
+      clearTimeout(initialDelay);
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+    };
+  }, [ably, isConnected, performDriftSync]);
+
+  // Track sync age for UI display
+  useEffect(() => {
+    if (!lastSyncTimestamp) return;
+
+    const updateAge = () => {
+      setLastSyncAge(Math.round((Date.now() - lastSyncTimestamp) / 1000));
+    };
+
+    updateAge();
+    const ageInterval = setInterval(updateAge, 1000);
+
+    return () => clearInterval(ageInterval);
+  }, [lastSyncTimestamp]);
 
   // Clock ticker for UI
   useEffect(() => {
@@ -156,7 +286,7 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
   }, [recentEvents, gateConfig, playStart, playSplit, playFinish]);
 
 
-  const triggerGate = async (source: 'manual' | 'motion' = 'manual', metadata?: { processingLatency?: number }) => {
+  const triggerGate = async (source: 'manual' | 'motion' = 'manual', metadata?: { processingLatency?: number; cameraLatency?: number | null }) => {
     if (!ably || !isConnected) return;
     const now = performance.now();
     let unifiedTime = now + offset;
@@ -168,14 +298,33 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
          unifiedTime -= calibrationStats.systemLag;
 
          if (source === 'motion') {
-             // 1. Frame Duration Center (Statistical)
-             unifiedTime -= (calibrationStats.frameDuration / 2);
+             // Camera Pipeline Latency Compensation
+             // Priority: Use actual hardware timestamp if available (Android Chrome)
+             // Fallback: Use statistical frame duration center estimation
+             if (metadata?.cameraLatency !== undefined && metadata.cameraLatency !== null) {
+                 // Use actual camera pipeline latency from hardware timestamp
+                 unifiedTime -= metadata.cameraLatency;
+                 console.log(`[TriggerGate] Using hardware cameraLatency: ${metadata.cameraLatency.toFixed(1)}ms`);
+             } else if (calibrationStats.frameDuration > 0) {
+                 // Fallback: Frame Duration Center (Statistical estimation)
+                 unifiedTime -= (calibrationStats.frameDuration / 2);
+                 console.log(`[TriggerGate] Fallback to frameDuration/2: ${(calibrationStats.frameDuration / 2).toFixed(1)}ms`);
+             }
 
-             // 2. Processing Latency (Specific)
+             // Processing Latency (our algorithm's execution time)
              if (metadata?.processingLatency) {
                  unifiedTime -= metadata.processingLatency;
              }
          }
+    } else if (source === 'motion') {
+        // Even without calibration, use camera latency if available
+        if (metadata?.cameraLatency !== undefined && metadata.cameraLatency !== null) {
+            unifiedTime -= metadata.cameraLatency;
+            console.log(`[TriggerGate] Uncalibrated, using cameraLatency: ${metadata.cameraLatency.toFixed(1)}ms`);
+        }
+        if (metadata?.processingLatency) {
+            unifiedTime -= metadata.processingLatency;
+        }
     }
 
     const channel = ably.channels.get('my-private-sprint-track');
@@ -213,7 +362,8 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
         distanceConfig,
         runCalibration,
         calibrationStats,
-        isCalibrating
+        isCalibrating,
+        lastSyncAge
     }}>
       {children}
     </RaceContext.Provider>

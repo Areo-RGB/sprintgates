@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import MotionGate from './components/MotionGate';
 import SprintList from './components/SprintList';
 import CalibrationDashboard from './components/CalibrationDashboard';
+import TrainingToolsLauncher from './components/TrainingToolsLauncher';
 
 const formatTime = (timestamp: number | null) => {
   if (!timestamp) return '00:00:00.000';
@@ -90,6 +91,9 @@ export default function Home() {
             
             {/* Calibration Dashboard (Pill) */}
             <CalibrationDashboard />
+
+            {/* Training Tools Launcher (Pill) */}
+            <TrainingToolsLauncher />
         </div>
         
         {/* Dynamic Distance Inputs (Full Width if open) */}

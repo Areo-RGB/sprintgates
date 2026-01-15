@@ -1,5 +1,29 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Features
+
+- **Real-time Sprint Timing** - Precision timing with networked synchronization
+- **Motion Gate Detection** - Camera-based automatic gate triggering
+- **Calibration System** - Network and system performance calibration
+- **Multiple Gate Support** - 2, 3, or 4 gate configurations
+- **Distance Configuration** - Customizable gate distances
+- **Training Tools Integration** - Access to cognitive and physical training tools
+
+## Training Tools
+
+The application integrates with the Flutter Windows native training app, providing quick access to:
+
+- **Farben** - Stroop effect cognitive trainer
+- **Kettenrechner** - Mental math chain calculator
+- **Timers** - Interval timers and loop presets
+- **Intervall** - Custom audio beep intervals
+- **Sound Counter** - Microphone sound detection
+- **Motion Counter** - Camera-based motion detection
+
+Click the "🏋️ Training" button in the top toolbar to launch training tools.
+
+For detailed integration documentation, see [TRAINING_INTEGRATION.md](./TRAINING_INTEGRATION.md).
+
 ## Getting Started
 
 First, run the development server:
