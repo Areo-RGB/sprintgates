@@ -69,9 +69,16 @@ export const useCanvasMotion = ({ onMotion, sensitivity, isArmed }: UseCanvasMot
         return;
       }
 
-      // Configure canvas if needed
-      if (canvasRef.current.width !== width || canvasRef.current.height !== height) {
-        canvasRef.current.width = width;
+      // Configure canvas for tripwire region only (with padding)
+      const stripWidth = 20;
+      const stripPadding = 40; // Extra pixels on each side for safety
+      const totalWidth = stripWidth + (stripPadding * 2);
+      const stripX = Math.floor((width - stripWidth) / 2);
+      const sourceX = Math.max(0, stripX - stripPadding);
+      
+      // Only resize canvas when needed
+      if (canvasRef.current.width !== totalWidth || canvasRef.current.height !== height) {
+        canvasRef.current.width = totalWidth;
         canvasRef.current.height = height;
         previousFrameRef.current = null; // Reset previous frame on resize
       }
@@ -79,15 +86,16 @@ export const useCanvasMotion = ({ onMotion, sensitivity, isArmed }: UseCanvasMot
       const ctx = canvasRef.current.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
 
-      // Draw current frame to canvas
-      ctx.drawImage(video, 0, 0, width, height);
+      // Draw ONLY the tripwire region (+ padding) from video - much faster!
+      ctx.drawImage(
+        video,
+        sourceX, 0, totalWidth, height,  // Source: crop from video
+        0, 0, totalWidth, height          // Dest: full canvas
+      );
 
-      // Analyze vertical strip in center (20px wide)
-      const stripWidth = 20;
-      const stripX = Math.floor((width - stripWidth) / 2);
-      
+      // Extract the actual tripwire strip (center of our cropped region)
       try {
-          const imageData = ctx.getImageData(stripX, 0, stripWidth, height);
+          const imageData = ctx.getImageData(stripPadding, 0, stripWidth, height);
           const data = imageData.data;
           
           let totalDelta = 0;
