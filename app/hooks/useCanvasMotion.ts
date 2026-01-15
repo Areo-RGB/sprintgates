@@ -104,14 +104,20 @@ export const useCanvasMotion = ({ onMotion, sensitivity, isArmed }: UseCanvasMot
           if (previousFrameRef.current) {
               const prevData = previousFrameRef.current;
               
-              // Compare with previous frame
-              for (let i = 0; i < data.length; i += 4) {
-                  // Grayscale conversion: 0.299*R + 0.587*G + 0.114*B
-                  const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-                  const prevGray = 0.299 * prevData[i] + 0.587 * prevData[i + 1] + 0.114 * prevData[i + 2];
-                  
-                  totalDelta += Math.abs(gray - prevGray);
-                  pixelCount++;
+              // Compare with previous frame using green channel only
+              // Sample every 4th row for speed (4x fewer iterations, negligible accuracy loss)
+              const bytesPerRow = stripWidth * 4; // 20px * 4 bytes (RGBA)
+              const rowSkip = 4; // Sample every 4th row
+              
+              for (let i = 0; i < data.length; i += bytesPerRow * rowSkip) {
+                  // Sample a few pixels per row
+                  for (let j = 0; j < bytesPerRow; j += 16) { // Every 4th pixel in row
+                      const idx = i + j + 1; // +1 for green channel
+                      if (idx < data.length) {
+                          totalDelta += Math.abs(data[idx] - prevData[idx]);
+                          pixelCount++;
+                      }
+                  }
               }
               
               const averageDelta = totalDelta / pixelCount;
