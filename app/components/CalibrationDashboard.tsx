@@ -5,7 +5,10 @@ import { useRace } from '../context/RaceProvider';
 import { useCanvasMotion } from '../hooks/useCanvasMotion'; // Type only maybe? 
 
 const CalibrationDashboard = () => {
-    const { calibrationStats, runCalibration, isCalibrating, isConnected, lastSyncAge } = useRace();
+    const { 
+        calibrationStats, runCalibration, isCalibrating, isConnected, lastSyncAge,
+        gpsTime, startGPSSync, stopGPSSync, isUsingGPS, setUseGPS
+    } = useRace();
     const [isOpen, setIsOpen] = useState(false);
 
     const getHealthColor = (error: number) => {
@@ -101,6 +104,61 @@ const CalibrationDashboard = () => {
                                 <div className={`text-center font-black font-mono text-2xl ${getHealthColor(stabilityScore)}`}>
                                     ±{stabilityScore.toFixed(1)}ms
                                 </div>
+                            </div>
+
+                            {/* GPS Time Source */}
+                            <div className="p-3 rounded-xl bg-gradient-to-r from-blue-900/20 to-purple-900/20 border border-blue-500/20 space-y-2">
+                                <div className="flex justify-between items-center">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-lg">🛰️</span>
+                                        <span className="text-white/80 text-xs font-semibold uppercase">GPS Time Source</span>
+                                    </div>
+                                    <button
+                                        onClick={() => {
+                                            if (isUsingGPS) {
+                                                stopGPSSync();
+                                                setUseGPS(false);
+                                            } else {
+                                                startGPSSync();
+                                                setUseGPS(true);
+                                            }
+                                        }}
+                                        className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase transition-all ${
+                                            isUsingGPS 
+                                            ? 'bg-blue-500 text-white' 
+                                            : 'bg-white/10 text-white/50 hover:bg-white/20'
+                                        }`}
+                                    >
+                                        {isUsingGPS ? 'ON' : 'OFF'}
+                                    </button>
+                                </div>
+                                
+                                {isUsingGPS && (
+                                    <div className="text-[10px] font-mono space-y-1">
+                                        {gpsTime.isActive ? (
+                                            <>
+                                                <div className="flex justify-between text-green-400">
+                                                    <span>✓ GPS Active</span>
+                                                    <span>Accuracy: {gpsTime.accuracy.toFixed(1)}m</span>
+                                                </div>
+                                                <div className="flex justify-between text-white/40">
+                                                    <span>Offset: {gpsTime.gpsOffset.toFixed(1)}ms</span>
+                                                    <span>Sub-ms precision</span>
+                                                </div>
+                                            </>
+                                        ) : gpsTime.error ? (
+                                            <div className="text-red-400">⚠ {gpsTime.error}</div>
+                                        ) : (
+                                            <div className="text-yellow-400 animate-pulse">⏳ Acquiring GPS fix...</div>
+                                        )}
+                                    </div>
+                                )}
+                                
+                                {!isUsingGPS && (
+                                    <div className="text-[9px] text-white/40">
+                                        Enable for sub-millisecond accuracy via satellite
+                                    </div>
+                                )}
                             </div>
 
                             {/* Sync Status */}

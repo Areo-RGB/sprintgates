@@ -95,8 +95,9 @@ const MotionGate = () => {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: 'environment', // Rear camera
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            width: { ideal: 1280 },    // Reduced for higher fps
+            height: { ideal: 720 },
+            frameRate: { ideal: 60, min: 30 }, // Request 60fps for better timing
           },
           audio: false,
         });

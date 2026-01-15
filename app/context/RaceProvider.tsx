@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useState, useRef, ReactNod
 import Ably from 'ably';
 import { CalibrationStats, useSystemCalibration } from '../hooks/useSystemCalibration';
 import { useRaceAudio } from '../hooks/useRaceAudio';
+import { useGPSTime, GPSTimeState } from '../hooks/useGPSTime';
 
 interface RaceEvent {
   timestamp: number;
@@ -23,18 +24,24 @@ interface RaceContextType {
   runCalibration: (videoElement?: HTMLVideoElement) => Promise<void>;
   calibrationStats: CalibrationStats;
   isCalibrating: boolean;
-  lastSyncAge: number | null; // How long ago was the last sync (seconds)
+  lastSyncAge: number | null;
+  // GPS Time
+  gpsTime: GPSTimeState;
+  startGPSSync: () => void;
+  stopGPSSync: () => void;
+  isUsingGPS: boolean;
+  setUseGPS: (use: boolean) => void;
 }
 
 const RaceContext = createContext<RaceContextType | undefined>(undefined);
 
 // Drift correction configuration
 const DRIFT_CORRECTION_CONFIG = {
-  SYNC_INTERVAL_MS: 30000,        // Sync every 30 seconds
-  SAMPLES_PER_SYNC: 5,            // Number of samples per sync burst
-  SMOOTHING_FACTOR: 0.3,          // EMA alpha (0.3 = 30% new, 70% old)
-  MAX_CORRECTION_MS: 50,          // Max single-step correction (prevents jumps)
-  OUTLIER_THRESHOLD_MS: 200,      // Reject samples with RTT above this
+  SYNC_INTERVAL_MS: 30000,
+  SAMPLES_PER_SYNC: 5,
+  SMOOTHING_FACTOR: 0.3,
+  MAX_CORRECTION_MS: 50,
+  OUTLIER_THRESHOLD_MS: 200,
 };
 
 export const RaceProvider = ({ children }: { children: ReactNode }) => {
@@ -47,9 +54,14 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
   const [syncTime, setSyncTime] = useState<number | null>(null);
   const [lastSyncTimestamp, setLastSyncTimestamp] = useState<number | null>(null);
   const [lastSyncAge, setLastSyncAge] = useState<number | null>(null);
+  const [isUsingGPS, setIsUsingGPS] = useState(false);
   const { playStart, playSplit, playFinish } = useRaceAudio();
   
   const { stats: calibrationStats, isCalibrating, runCalibration: runCalibHook } = useSystemCalibration();
+  
+  // GPS Time integration
+  const gpsTimeHook = useGPSTime();
+  const { isActive: gpsActive, gpsOffset, startGPSSync, stopGPSSync } = gpsTimeHook;
   
   // Refs for drift correction
   const isSyncingRef = useRef(false);
@@ -259,14 +271,26 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
 
     const tick = () => {
       const now = performance.now();
-      setSyncTime(now + offset);
+      
+      // Use GPS offset if GPS is enabled and active, otherwise use network offset
+      let effectiveOffset = offset;
+      if (isUsingGPS && gpsActive) {
+        // GPS offset is relative to Date.now(), so we need to convert
+        // gpsOffset = gpsTimestamp - Date.now()
+        // For display, we want performance.now() + some offset that matches GPS time
+        // This is an approximation since performance.now() and Date.now() have different epochs
+        const dateNowOffset = Date.now() - performance.now();
+        effectiveOffset = gpsOffset + dateNowOffset;
+      }
+      
+      setSyncTime(now + effectiveOffset);
       animationFrameId = requestAnimationFrame(tick);
     };
 
     tick();
 
     return () => cancelAnimationFrame(animationFrameId);
-  }, [isConnected, offset]);
+  }, [isConnected, offset, isUsingGPS, gpsActive, gpsOffset]);
 
   // Audio effect based on recent events
   const prevEventsLength = useRef(0);
@@ -363,7 +387,13 @@ export const RaceProvider = ({ children }: { children: ReactNode }) => {
         runCalibration,
         calibrationStats,
         isCalibrating,
-        lastSyncAge
+        lastSyncAge,
+        // GPS Time
+        gpsTime: gpsTimeHook,
+        startGPSSync,
+        stopGPSSync,
+        isUsingGPS,
+        setUseGPS: setIsUsingGPS
     }}>
       {children}
     </RaceContext.Provider>
